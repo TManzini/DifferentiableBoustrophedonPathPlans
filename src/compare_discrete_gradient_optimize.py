@@ -16,7 +16,7 @@ def compare_discrete_v_gradient_optimize(polygon, transect_spacing, points_per_t
 	_, _, discrete_score = optimize_discrete(polygon, transect_spacing, grid_samples=max_comparisons)
 	return float(gradient_score), float(discrete_score)
 
-num_polygons = 10
+num_polygons = 1000
 polygon_rescale = 1.0
 points_per_transect = 1000
 

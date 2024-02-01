@@ -16,7 +16,7 @@ echo "Generating a 3d plot of the optimization surface at varying thetas, temper
 python plot_surface_theta_temperature.py --transect_spacing 0.5 --points_per_transect 1000 --theta_evaluation_interval 1.0 --temperature_evaluation_interval 5 --polygon_rescale_term 1.0 --polygon_coordinates_json_path $polygon_json_file --output_folder_path $plot_folder
 echo "Measuring representation error between discrete and differentiable representations"
 python compare_discrete_gradient.py 
-echo "Measuring error between grid search and gradient descent"
+echo "Measuring average error between grid search and gradient descent... This will take a while..."
 python compare_discrete_gradient_optimize.py
 
 echo "Generating a supplemental 2d plot of the optimization surface at varying thetas, temperatures at a fixed xoffset"
