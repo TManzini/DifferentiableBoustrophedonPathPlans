@@ -1,0 +1,6 @@
+shapely==2.0.2
+numpy==1.26.3
+torch==2.2.0
+matplotlib==3.8.2
+alive-progress==3.1.5
+polygenerator==0.2.0
