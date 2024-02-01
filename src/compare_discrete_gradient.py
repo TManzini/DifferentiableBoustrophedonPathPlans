@@ -1,5 +1,6 @@
 import argparse
 import torch
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -34,52 +35,67 @@ def compare_discrete_v_gradient_settings(polygon, transect_spacing, theta, x_off
 
 	return float(gradient_score), float(discrete_score)
 
-num_polygons = 1000
-polygon_rescale = 1.0
+if(__name__ == "__main__"):
+	parser = argparse.ArgumentParser()
+	parser.add_argument('--polygon_rescale_term', type=float, help='The scale at which the polygon will be resized to prior to optimization', default=1.0)
+	parser.add_argument('--output_folder_path', type=str, help="The path to the folder where the output image should be saved.", default=".")
+	parser.add_argument('--num_polygons', type=int, help='The number of polygons that should be used to compare grid search vs gradient descent', default=10)
+	args = parser.parse_args()
 
-theta_random = np.random.default_rng()
-x_offset_random = np.random.default_rng()
-transect_spacing_random = np.random.default_rng()
-polygon_point_random = np.random.default_rng()
+	num_polygons = args.num_polygons
+	polygon_rescale = args.polygon_rescale_term
 
-points_per_transect_range = [100, 1000, 10000]
-temperature_range = [1, 10, 100, 1000, 10000]
+	theta_random = np.random.default_rng()
+	x_offset_random = np.random.default_rng()
+	transect_spacing_random = np.random.default_rng()
+	polygon_point_random = np.random.default_rng()
 
-min_transect_spacing = 10e-4
+	points_per_transect_range = [100, 1000, 10000]
+	temperature_range = [1, 10, 100, 1000, 10000]
 
-errors = {k:{} for k in points_per_transect_range}
-for k in errors.keys():
-	errors[k] = {j:[] for j in temperature_range}
+	min_transect_spacing = 10e-4
 
-with alive_bar(len(points_per_transect_range) * len(temperature_range) * num_polygons) as bar:
-	for temp in temperature_range:
-		for points_per_transect in points_per_transect_range:
-			n = 0
-			while n < num_polygons:
-				try:
-					polygon_coords = random_convex_polygon(num_points=polygon_point_random.integers(3, 10))
-					polygon_coords, _ = rescale_polygon(polygon_coords, polygon_rescale)
+	errors = {k:{} for k in points_per_transect_range}
+	for k in errors.keys():
+		errors[k] = {j:[] for j in temperature_range}
 
-					transect_spacing = 0.5#transect_spacing_random.random()/3 #Divide by 3 so that there will be at minimum 3 transects 
+	with alive_bar(len(points_per_transect_range) * len(temperature_range) * num_polygons) as bar:
+		for temp in temperature_range:
+			for points_per_transect in points_per_transect_range:
+				n = 0
+				while n < num_polygons:
+					try:
+						polygon_coords = random_convex_polygon(num_points=polygon_point_random.integers(3, 10))
+						polygon_coords, _ = rescale_polygon(polygon_coords, polygon_rescale)
 
-					if(transect_spacing < min_transect_spacing):
-						raise Exception("Transect spacing is too small.")
+						transect_spacing = 0.5#transect_spacing_random.random()/3 #Divide by 3 so that there will be at minimum 3 transects 
 
-					theta = theta_random.random()*360 #Multiply by 360 in order to get a unique degree
-					x_offset = x_offset_random.random()*transect_spacing - (transect_spacing/2) #Math to make it so that we will uniformly randomly sample the space between transects
+						if(transect_spacing < min_transect_spacing):
+							raise Exception("Transect spacing is too small.")
 
-					g, d = compare_discrete_v_gradient_settings(polygon_coords, transect_spacing, theta, x_offset, points_per_transect, temp, temp, polygon_rescale)
+						theta = theta_random.random()*360 #Multiply by 360 in order to get a unique degree
+						x_offset = x_offset_random.random()*transect_spacing - (transect_spacing/2) #Math to make it so that we will uniformly randomly sample the space between transects
 
-					if np.isnan(g) or np.isnan(d):
-						raise Exception("Got NaN")
+						g, d = compare_discrete_v_gradient_settings(polygon_coords, transect_spacing, theta, x_offset, points_per_transect, temp, temp, polygon_rescale)
 
-					errors[points_per_transect][temp].append(np.absolute(g-d))
-					n += 1
-					bar()
-				except Exception:
-					pass
+						if np.isnan(g) or np.isnan(d):
+							raise Exception("Got NaN")
 
-for k in errors.keys():
-	for j in errors[k]:
-		print("Average error for", k, "points per transect and temperature of", j, "was:", np.mean(errors[k][j]), " (N=" + str(len(errors[k][j])) + ")")
-	print("\n\n")
+						errors[points_per_transect][temp].append(np.absolute(g-d))
+						n += 1
+						bar()
+					except Exception:
+						pass
+
+	f = open(os.path.join(args.output_folder_path, "discrete_vs_differentiable_comparison_results.txt"), "w")
+	f.write(info_str + "\n")
+	f.write(stat_str + "\n")
+	
+	for k in errors.keys():
+		for j in errors[k]:
+			output_str = "Average error for" + str(k) + "points per transect and temperature of" + str(j) + "was:" + str(np.mean(errors[k][j])) + " (N=" + str(len(errors[k][j])) + ")"
+			print(output_str)
+			f.write(output_str + "\n")
+		print("\n\n")
+		f.write("\n\n")
+	f.close()
