@@ -1,3 +1,5 @@
+# Differentiable Boustrophedon Path Plans
+
 This repository contains the source code associated with the ICRA'24 paper "[Differentiable Boustrophendon Path Plans](https://arxiv.org/abs/2309.09882)"
 
 To replicate the results of this paper, run the following commands from the base directory of this repo...
