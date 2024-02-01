@@ -88,12 +88,10 @@ if(__name__ == "__main__"):
 						pass
 
 	f = open(os.path.join(args.output_folder_path, "discrete_vs_differentiable_comparison_results.txt"), "w")
-	f.write(info_str + "\n")
-	f.write(stat_str + "\n")
 	
 	for k in errors.keys():
 		for j in errors[k]:
-			output_str = "Average error for" + str(k) + "points per transect and temperature of" + str(j) + "was:" + str(np.mean(errors[k][j])) + " (N=" + str(len(errors[k][j])) + ")"
+			output_str = "Average error for " + str(k) + " points per transect and temperature of " + str(j) + " was: " + str(np.mean(errors[k][j])) + " (N=" + str(len(errors[k][j])) + ")"
 			print(output_str)
 			f.write(output_str + "\n")
 		print("\n\n")
