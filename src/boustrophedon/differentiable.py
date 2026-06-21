@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from shape_utils import degree_to_radians, dist_between, get_polygon_centroid_from_coordinates, \
 						get_max_polygon_width_from_coordinates, recenter_centroid_at_origin, \
 						rescale_polygon
+from boustrophedon.closed_form import closed_form_transect_length, soft_closed_form_transect_length
 
 X = 0
 Y = 1
@@ -83,13 +84,27 @@ def approximate_transect_length(transect, line_weights, line_biases, temp, x_off
 
 	return score_prod, transect_length_prod
 
-def score_polygon_orientation(transects, line_weights, line_biases, x_offset, polygon_temp, transect_falloff_temp, a=0.5, b=0.5):
+def score_polygon_orientation(transects, line_weights, line_biases, x_offset, polygon_temp, transect_falloff_temp, a=0.5, b=0.5, use_closed_form=False, closed_form_beta=None):
 	proportions_of_transects_shown = []
-	
+
 	#Score all the points in the transects
+	#use_closed_form swaps the trapezoidal approximation of equation 6 for the
+	#closed-form transect length (geometric chord). It needs no points-per-transect
+	#and is O(faces) instead of O(faces*PPT).
+	#  closed_form_beta=None : exact (hard) chord -- maximum fidelity, kinked surface.
+	#  closed_form_beta=<num>: smoothed chord -- beta is the smoothness knob that
+	#    replaces Temperature. Small beta melts the polygon (smooth landscape for
+	#    escaping local minima); large beta -> the exact chord. Anneal beta upward.
 
 	for transect in transects:
-		visible_transect, l = approximate_transect_length(transect, line_weights, line_biases, polygon_temp, x_offset)
+		if use_closed_form:
+			x = transect[0][X] + torch.as_tensor(x_offset).reshape(-1)[0]
+			if closed_form_beta is None:
+				l = closed_form_transect_length(x, line_weights, line_biases)
+			else:
+				l = soft_closed_form_transect_length(x, line_weights, line_biases, closed_form_beta)
+		else:
+			visible_transect, l = approximate_transect_length(transect, line_weights, line_biases, polygon_temp, x_offset)
 		proportions_of_transects_shown.append(l)
 	
 	#Estimate if which transects we showed using the sigmoid function
