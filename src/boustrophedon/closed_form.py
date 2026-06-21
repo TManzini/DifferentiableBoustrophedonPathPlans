@@ -45,6 +45,8 @@ run parallel to the Y axis from y_min=-0.5 to y_max=0.5.
 
 import torch
 
+from boustrophedon.triangulate import ear_clip_triangulate
+
 X = 0
 Y = 1
 
@@ -172,6 +174,84 @@ def soft_closed_form_transect_length(x, line_weights, line_biases, beta,
         length = length * gate
 
     return length
+
+
+def triangulated_face_groups(coordinates):
+    """Ear-clip ``coordinates`` (any simple polygon, convex or concave) and
+    build the (W, B) face list for each triangle via the same point-pair
+    construction used for a single convex polygon.
+
+    Returns a list of (line_weights, line_biases) tuples, one per triangle
+    (each with exactly 3 faces). Compute once per polygon shape; rotate every
+    triangle's faces together each step (see ``rotate_triangulated_faces``).
+    """
+    from boustrophedon.differentiable import generate_polygon_weights_and_biases_from_coordinates
+    triangles = ear_clip_triangulate(coordinates)
+    groups = []
+    for tri in triangles:
+        line_components = generate_polygon_weights_and_biases_from_coordinates(tri)
+        weights = [w for w, _ in line_components]
+        biases = [b for _, b in line_components]
+        groups.append((weights, biases))
+    return groups
+
+
+def rotate_triangulated_faces(face_groups, angle):
+    """Apply the existing rigid rotation to every triangle's faces uniformly.
+
+    ``angle`` is rotated identically for all triangles (it is one rigid
+    transform of the whole polygon), so this is just
+    ``rotate_polygon`` mapped over each triangle's face list.
+    """
+    from boustrophedon.differentiable import rotate_polygon
+    rotated = []
+    for weights, biases in face_groups:
+        line_components = list(zip(weights, biases))
+        w_rot, b_rot = rotate_polygon(line_components, angle)
+        rotated.append((w_rot, b_rot))
+    return rotated
+
+
+def nonconvex_closed_form_transect_length(x, rotated_face_groups, beta=None,
+                                          y_min=-0.5, y_max=0.5):
+    """Exact (or smoothed) chord length through a non-convex polygon at ``x``.
+
+    ``rotated_face_groups`` is the per-triangle (weights, biases) list from
+    ``rotate_triangulated_faces``. Because a triangulation partitions the
+    polygon into pieces with disjoint interiors, the chord through the whole
+    (possibly concave) polygon at any x is the *sum* of the per-triangle chord
+    lengths -- no union/inclusion-exclusion needed, and no double counting,
+    since for almost every x the triangles' y-intervals at that x are disjoint.
+
+    ``beta=None`` sums the exact ``closed_form_transect_length`` per triangle
+    (matches the convex closed form exactly when the polygon happens to be
+    convex / triangulates into pieces sharing every transect uniformly).
+    A finite ``beta`` sums the smoothed ``soft_closed_form_transect_length``
+    per triangle instead, for the same tunable-smoothness benefit as the
+    convex case, now over a concave shape.
+    """
+    total = None
+    for weights, biases in rotated_face_groups:
+        if beta is None:
+            l = closed_form_transect_length(x, weights, biases, y_min=y_min, y_max=y_max)
+        else:
+            l = soft_closed_form_transect_length(x, weights, biases, beta, y_min=y_min, y_max=y_max)
+        total = l if total is None else total + l
+    return total
+
+
+def nonconvex_closed_form_transect_lengths(transects, rotated_face_groups, x_offset,
+                                           beta=None, y_min=-0.5, y_max=0.5):
+    """Batch version mirroring ``closed_form_transect_lengths`` for non-convex
+    polygons: sums per-triangle chord lengths for every transect in ``transects``.
+    """
+    x_offset = torch.as_tensor(x_offset).reshape(-1)[0]
+    lengths = []
+    for transect in transects:
+        x = transect[0][X] + x_offset
+        lengths.append(nonconvex_closed_form_transect_length(
+            x, rotated_face_groups, beta=beta, y_min=y_min, y_max=y_max))
+    return torch.stack(lengths)
 
 
 def closed_form_transect_lengths(transects, line_weights, line_biases, x_offset,

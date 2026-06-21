@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 from shape_utils import degree_to_radians, dist_between, get_polygon_centroid_from_coordinates, \
 						get_max_polygon_width_from_coordinates, recenter_centroid_at_origin, \
 						rescale_polygon
-from boustrophedon.closed_form import closed_form_transect_length, soft_closed_form_transect_length
+from boustrophedon.closed_form import closed_form_transect_length, soft_closed_form_transect_length, \
+						nonconvex_closed_form_transect_length
 
 X = 0
 Y = 1
@@ -125,6 +126,63 @@ def score_polygon_orientation(transects, line_weights, line_biases, x_offset, po
 		#Compute the difference between the average length and the current transect, count it if it was shown, and then square it
 		sum_squared_diff += ((e_len-e_avg_len)*shown)**2
 	
+	e_avg_squared_diff = sum_squared_diff/estimated_number_of_transects
+	e_std_len = e_avg_squared_diff**0.5
+
+	m_i_prime = e_avg_len
+	cov_i = 1-(e_std_len)
+
+	result_score = a*m_i_prime + b*cov_i
+
+	return result_score
+
+def approximate_nonconvex_transect_length(transect, rotated_face_groups, temp, x_offset):
+	#Trapezoidal transect length through a non-convex polygon: sum the existing
+	#trapezoidal length (Eq. 6) over each triangle of a triangulation
+	#(boustrophedon.closed_form.triangulated_face_groups / rotate_triangulated_faces).
+	#Triangles have disjoint interiors, so summing per-triangle integrals equals
+	#the integral over their union exactly (linearity of integration) -- no extra
+	#approximation beyond the existing per-triangle temperature/trapezoidal error.
+	total = None
+	for weights, biases in rotated_face_groups:
+		_, l = approximate_transect_length(transect, weights, biases, temp, x_offset)
+		total = l if total is None else total + l
+	return total
+
+def score_polygon_orientation_nonconvex(transects, rotated_face_groups, x_offset, polygon_temp, transect_falloff_temp, a=0.5, b=0.5, use_closed_form=True, closed_form_beta=None):
+	#Same fitness function as score_polygon_orientation (Eq. 1/7), for a
+	#non-convex polygon given as a triangulation: rotated_face_groups is the
+	#per-triangle (weights, biases) list from
+	#boustrophedon.closed_form.rotate_triangulated_faces. Each transect's length
+	#is the SUM of its chord length through every triangle -- exact, since the
+	#triangulation partitions the polygon (disjoint interiors, no double count).
+	#  use_closed_form=True  : nonconvex_closed_form_transect_length (hard chord
+	#    if closed_form_beta is None, smoothed chord otherwise).
+	#  use_closed_form=False : approximate_nonconvex_transect_length (the
+	#    existing trapezoidal Eq. 6 integral, summed per triangle).
+	proportions_of_transects_shown = []
+
+	for transect in transects:
+		if use_closed_form:
+			x = transect[0][X] + torch.as_tensor(x_offset).reshape(-1)[0]
+			l = nonconvex_closed_form_transect_length(x, rotated_face_groups, beta=closed_form_beta)
+		else:
+			l = approximate_nonconvex_transect_length(transect, rotated_face_groups, polygon_temp, x_offset)
+		proportions_of_transects_shown.append(l)
+
+	proportions_of_transects_shown_tensor = torch.stack(proportions_of_transects_shown)
+
+	proportions_of_transects_shown_temp = torch.multiply(proportions_of_transects_shown_tensor, transect_falloff_temp)
+	estimated_transects_shown = (torch.sigmoid(proportions_of_transects_shown_temp)-0.5)/0.5
+
+	estimated_number_of_transects = torch.sum(estimated_transects_shown)
+
+	e_avg_len = torch.sum(proportions_of_transects_shown_tensor)/estimated_number_of_transects
+
+	sum_squared_diff = 0
+	for shown, e_len in zip(estimated_transects_shown, proportions_of_transects_shown):
+		sum_squared_diff += ((e_len-e_avg_len)*shown)**2
+
 	e_avg_squared_diff = sum_squared_diff/estimated_number_of_transects
 	e_std_len = e_avg_squared_diff**0.5
 
