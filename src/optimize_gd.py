@@ -1,11 +1,13 @@
 import argparse
+import json
 import math
 import torch
 import numpy as np
 
 from shape_utils import recenter_centroid_at_origin, rescale_polygon
-from boustrophedon.differentiable import generate_polygon_weights_and_biases_from_coordinates, get_transect_points, score_polygon_orientation, rotate_polygon
+from boustrophedon.differentiable import generate_polygon_weights_and_biases_from_coordinates, get_transect_points, score_polygon_orientation, rotate_polygon, score_polygon_orientation_nonconvex
 from boustrophedon.discrete import discrete_score_polygon_orientation, make_polygon_from_points, get_transects, rotate_polygon_discrete
+from boustrophedon.closed_form import triangulated_face_groups, rotate_triangulated_faces
 
 from plot_surface_grad_error import cover_space
 
@@ -35,16 +37,28 @@ def optimize(polygon_coords,
              early_stopping_gradient_value=10e-12,
              max_sigmoid_temp=600,
              top_k_retest=1,
-             max_epochs=1000):
+             max_epochs=1000,
+             use_closed_form=False,
+             smooth_closed_form=False,
+             nonconvex=False):
 
 	#Center the coordinates of the polygon at the origin
 	centered_coords = recenter_centroid_at_origin(polygon_coords)
 
 	#Rescale them so the diameter of the polygon is 1.0 units
 	scaled_coords, scale_factor = rescale_polygon(centered_coords, polygon_rescale)
-	
-	#Generate the matrix representations of the faces of the polygon
-	line_components = generate_polygon_weights_and_biases_from_coordinates(scaled_coords)
+
+	#nonconvex triangulates the (possibly concave) polygon once and treats each
+	#triangle as its own tiny convex face set; per-transect length is the SUM of
+	#the per-triangle lengths (exact, since triangles partition the polygon).
+	#This only supports the closed-form path (hard or smoothed via
+	#smooth_closed_form) -- there is no separate trapezoidal-only mode for
+	#non-convex polygons here, since the closed form is already exact and faster.
+	if nonconvex:
+		face_groups = triangulated_face_groups(scaled_coords)
+	else:
+		#Generate the matrix representations of the faces of the polygon
+		line_components = generate_polygon_weights_and_biases_from_coordinates(scaled_coords)
 
 	#Generate the transects that we are going to use to evaluate the polygon
 	min_transect_distance = ((-polygon_rescale/2)+(-transect_spacing/2))*1.5 #Half the width of the polygon, and half the width of a transect, times a safety factor of 1.5
@@ -79,12 +93,26 @@ def optimize(polygon_coords,
 	while(epoch < max_epochs and keep_going):
 		#print("Epoch:", epoch)
 
-		#Rotate the polygon
-		rotated_line_weights, line_biases = rotate_polygon(line_components, theta)
-		
 		#Compute the Score
-		score = score_polygon_orientation(transects, rotated_line_weights, line_biases, x_offset, sigmoid_temp, sigmoid_temp)
-		
+		#use_closed_form replaces the trapezoidal length (Eq. 6) with the closed-form
+		#chord length, needing no points-per-transect.
+		#smooth_closed_form additionally reuses sigmoid_temp as the smoothness knob
+		#"beta" of the soft chord (soft_closed_form_transect_length), so the same
+		#anneal schedule that used to melt/solidify the trapezoidal integrand now
+		#melts/solidifies the closed-form chord directly -- giving back the smooth
+		#early landscape GD needs to escape local minima, without any integration.
+		#use_closed_form alone (smooth_closed_form=False) is the exact hard chord:
+		#temperature-free, maximum fidelity, but as kinked/non-convex as high Temp.
+		closed_form_beta = sigmoid_temp if smooth_closed_form else None
+		if nonconvex:
+			#Rotate every triangle's faces with the same rigid transform.
+			rotated_face_groups = rotate_triangulated_faces(face_groups, theta)
+			score = score_polygon_orientation_nonconvex(transects, rotated_face_groups, x_offset, sigmoid_temp, sigmoid_temp, use_closed_form=True, closed_form_beta=closed_form_beta)
+		else:
+			#Rotate the polygon
+			rotated_line_weights, line_biases = rotate_polygon(line_components, theta)
+			score = score_polygon_orientation(transects, rotated_line_weights, line_biases, x_offset, sigmoid_temp, sigmoid_temp, use_closed_form=(use_closed_form or smooth_closed_form), closed_form_beta=closed_form_beta)
+
 		#Multiply by -1 so the optimizer will maximize instead of minimize
 		maximize_score = score * -1
 		
@@ -152,6 +180,9 @@ if(__name__ == "__main__"):
 	parser.add_argument('--start_theta', type=float, help='The scale at which the polygon will be resized to prior to optimization', default=180.0)
 	parser.add_argument('--temp_max', type=float, help='The maximum temperature that will be used in the sigmoid functions.', default=600)
 	parser.add_argument('--polygon_coordinates_json_path', type=str, help="The path to a file which contains the coordinates of the polygon to be inspected", default=None)
+	parser.add_argument('--use_closed_form', action='store_true', help="Use the exact closed-form chord length instead of the trapezoidal approximation of Eq. 6 (temperature-free, maximum fidelity, kinked landscape).")
+	parser.add_argument('--smooth_closed_form', action='store_true', help="Use the closed-form chord length with a smoothness knob (beta=sigmoid_temp) in place of the trapezoidal Temp, recovering a smooth early landscape without integration. Implies --use_closed_form.")
+	parser.add_argument('--nonconvex', action='store_true', help="Triangulate the polygon (ear clipping) and sum per-triangle closed-form chord lengths, supporting concave polygons. Always uses the closed form (hard, or smoothed if --smooth_closed_form is also set).")
 	args = parser.parse_args()
 
 	coords = [
@@ -171,7 +202,10 @@ if(__name__ == "__main__"):
                                  args.temperature_growth_rate,
                                  args.start_theta,
                                  args.polygon_rescale,
-                                 max_sigmoid_temp=args.temp_max)
+                                 max_sigmoid_temp=args.temp_max,
+                                 use_closed_form=args.use_closed_form,
+                                 smooth_closed_form=args.smooth_closed_form,
+                                 nonconvex=args.nonconvex)
 
 	print("\n\nGD Solution converged...")
 	print("\tScore:", float(score))
